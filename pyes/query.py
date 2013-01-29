@@ -2,14 +2,13 @@
 from __future__ import absolute_import
 
 try:
-    # For Python >= 2.6
-    import json
-except ImportError:
     # For Python < 2.6 or people using a newer version of simplejson
     import simplejson as json
+except ImportError:
+    # For Python >= 2.6
+    import json
 
 from .utils import clean_string, ESRange, EqualityComparableUsingAttributeDictionary
-from .facets import FacetFactory
 from .highlight import HighLighter
 from .scriptfields import ScriptFields
 from .exceptions import InvalidQuery, InvalidParameterQuery, QueryError, ScriptFieldsError
@@ -74,6 +73,12 @@ class Search(EqualityComparableUsingAttributeDictionary):
     This contains a query, and has additional parameters which are used to
     control how the search works, what it should return, etc.
 
+    Example:
+
+    q = StringQuery('elasticsearch')
+    s = Search(q, fields=['title', 'author'], start=100, size=50)
+    results = conn.search(s)
+
     """
 
     def __init__(self, query=None, filter=None, fields=None, start=None, size=None, highlight=None, sort=None,
@@ -83,9 +88,10 @@ class Search(EqualityComparableUsingAttributeDictionary):
         fields: if is [], the _source is not returned
         """
         if not index_boost: index_boost = {}
+        from .facets import FacetFactory
         self.query = query
         self.filter = filter
-        self.fields = fields
+        self.fields = fields or []
         self.start = start
         self.size = size
         self._highlight = highlight
@@ -94,7 +100,7 @@ class Search(EqualityComparableUsingAttributeDictionary):
         self.facet = facet or FacetFactory()
         self.version = version
         self.track_scores = track_scores
-        self.script_fields = script_fields
+        self._script_fields = script_fields
         self.index_boost = index_boost
         self.min_score = min_score
         self.stats = stats
@@ -125,7 +131,7 @@ class Search(EqualityComparableUsingAttributeDictionary):
                 raise InvalidQuery("Invalid query")
         if self.filter:
             res['filter'] = self.filter.serialize()
-        if self.fields is not None:
+        if self.fields:
             res['fields'] = self.fields
         if self.size is not None:
             res['size'] = self.size
@@ -141,11 +147,13 @@ class Search(EqualityComparableUsingAttributeDictionary):
             res['version'] = self.version
         if self.track_scores:
             res['track_scores'] = self.track_scores
-        if self.script_fields:
+        if self._script_fields:
             if isinstance(self.script_fields, ScriptFields):
                 res['script_fields'] = self.script_fields.serialize()
+            elif isinstance(self.script_fields, dict):
+                res['script_fields'] = self.script_fields.serialize()
             else:
-                raise ScriptFieldsError("Parameter script_fields should of type ScriptFields")
+                raise ScriptFieldsError("Parameter script_fields should of type ScriptFields or dict")
         if self.index_boost:
             res['indices_boost'] = self.index_boost
         if self.min_score:
@@ -163,6 +171,12 @@ class Search(EqualityComparableUsingAttributeDictionary):
         if self._highlight is None:
             self._highlight = HighLighter("<b>", "</b>")
         return self._highlight
+
+    @property
+    def script_fields(self):
+        if self._script_fields is None:
+            self._script_fields = ScriptFields()
+        return self._script_fields
 
     def add_highlight(self, field, fragment_size=None,
                       number_of_fragments=None, fragment_offset=None):
@@ -380,7 +394,7 @@ class ConstantScoreQuery(Query):
         combined with an ANDFilter.
 
         """
-        from pyes.filters import Filter
+        from .filters import Filter
 
         if isinstance(filter, Filter):
             self.filters.append(filter)
@@ -405,7 +419,7 @@ class ConstantScoreQuery(Query):
         if len(self.filters) == 1:
             filters.update(self.filters[0].serialize())
         else:
-            from pyes import ANDFilter
+            from .filters import ANDFilter
 
             filters.update(ANDFilter(self.filters).serialize())
         if not filters:
@@ -419,6 +433,23 @@ class HasChildQuery(Query):
 
     def __init__(self, type, query, _scope=None, **kwargs):
         super(HasChildQuery, self).__init__(**kwargs)
+        self.type = type
+        self._scope = _scope
+        self.query = query
+
+    def serialize(self):
+        data = {
+            'type': self.type,
+            'query': self.query.serialize()}
+        if self._scope is not None:
+            data['_scope'] = self._scope
+        return {self._internal_name: data}
+
+class HasParentQuery(Query):
+    _internal_name = "has_parent"
+
+    def __init__(self, type, query, _scope=None, **kwargs):
+        super(HasParentQuery, self).__init__(**kwargs)
         self.type = type
         self._scope = _scope
         self.query = query
@@ -582,6 +613,16 @@ class FieldQuery(Query):
 
 
 class FilteredQuery(Query):
+    """
+    FilteredQuery allows for results to be filtered using the various filter classes.
+
+    Example:
+
+    t = TermFilter('name', 'john')
+    q = FilteredQuery(MatchAllQuery(), t)
+    results = conn.search(q)
+
+    """
     _internal_name = "filtered"
 
     def __init__(self, query, filter, **kwargs):
@@ -692,7 +733,9 @@ class FuzzyQuery(Query):
     A fuzzy based query that uses similarity based on Levenshtein (edit distance) algorithm.
 
     Note
-        Warning: this query is not very scalable with its default prefix length of 0 - in this case, every term will be enumerated and cause an edit score calculation. Here is a simple example:
+        Warning: this query is not very scalable with its default prefix
+        length of 0 - in this case, every term will be enumerated and cause an
+        edit score calculation. Here is a simple example:
 
     """
     _internal_name = "fuzzy"
@@ -747,6 +790,15 @@ class FuzzyLikeThisFieldQuery(Query):
 
 
 class MatchAllQuery(Query):
+    """
+    Query used to match all
+
+    Example:
+
+    q = MatchAllQuery()
+    results = conn.search(q)
+
+    """
     _internal_name = "match_all"
 
     def __init__(self, boost=None, **kwargs):
@@ -873,6 +925,16 @@ class TermQuery(Query):
 
     A boost may be supplied.
 
+    Example:
+
+    q = TermQuery('name', 'john')
+    results = conn.search(q)
+
+    With boost:
+
+    q = TermQuery('name', 'john', boost=0.75)
+    results = conn.search(q)
+
     """
     _internal_name = "term"
 
@@ -921,6 +983,15 @@ class TermsQuery(TermQuery):
 class TextQuery(Query):
     """
     A new family of text queries that accept text, analyzes it, and constructs a query out of it.
+
+    Examples:
+
+    q = TextQuery('book_title', 'elasticsearch')
+    results = conn.search(q)
+
+    q = TextQuery('book_title', 'elasticsearch python', operator='and')
+    results = conn.search(q)
+
     """
     _internal_name = "text"
     _valid_types = ['boolean', "phrase", "phrase_prefix"]
@@ -928,16 +999,16 @@ class TextQuery(Query):
 
     def __init__(self, field, text, type="boolean", slop=0, fuzziness=None,
                  prefix_length=0, max_expansions=2147483647,
-                 operator="or", analyzer=None, **kwargs):
+                 operator="or", analyzer=None, boost=1.0, **kwargs):
         super(TextQuery, self).__init__(**kwargs)
         self.queries = {}
         self.add_query(field, text, type, slop, fuzziness,
                        prefix_length, max_expansions,
-                       operator, analyzer)
+                       operator, analyzer, boost)
 
     def add_query(self, field, text, type="boolean", slop=0, fuzziness=None,
                   prefix_length=0, max_expansions=2147483647,
-                  operator="or", analyzer=None):
+                  operator="or", analyzer=None, boost=1.0):
         if type not in self._valid_types:
             raise QueryError("Invalid value '%s' for type: allowed values are %s" % (type, self._valid_types))
         if operator not in self._valid_operators:
@@ -956,6 +1027,10 @@ class TextQuery(Query):
             query["max_expansions"] = max_expansions
         if operator:
             query["operator"] = operator
+        if boost != 1.0:
+            query["boost"] = boost
+        if analyzer:
+            query["analyzer"] = analyzer
 
         self.queries[field] = query
 
@@ -971,6 +1046,15 @@ class RegexTermQuery(TermQuery):
 
 
 class StringQuery(Query):
+    """
+    Query to match values on all fields for a given string
+
+    Example:
+
+    q = StringQuery('elasticsearch')
+    results = conn.search(q)
+
+    """
     _internal_name = "query_string"
 
     def __init__(self, query, default_field=None,
@@ -1015,7 +1099,7 @@ class StringQuery(Query):
             if not isinstance(self.default_field, (str, unicode)) and isinstance(self.default_field, list):
                 if not self.use_dis_max:
                     filters["use_dis_max"] = self.use_dis_max
-                if self.tie_breaker:
+                if self.tie_breaker != 0:
                     filters["tie_breaker"] = self.tie_breaker
 
         if self.default_operator != "OR":

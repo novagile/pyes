@@ -25,6 +25,9 @@ class FacetFactory(EqualityComparableUsingAttributeDictionary):
         """Add a term factory"""
         self.facets.append(facet)
 
+    def reset(self):
+        """Reset the facets"""
+        self.facets=[]
     @property
     def q(self):
         res = {}
@@ -50,7 +53,7 @@ class Facet(EqualityComparableUsingAttributeDictionary):
         if self.is_global:
             data['global'] = self.is_global
         if self.facet_filter:
-            data.update(self.facet_filter.q)
+            data.update({'facet_filter': self.facet_filter.serialize()})
 
         return data
 
@@ -130,6 +133,10 @@ class HistogramFacet(Facet):
                 raise RuntimeError("Invalid key_script: value_script required")
             if self.params:
                 data['params'] = self.params
+            if self.interval:
+                data['interval'] = self.interval
+            elif self.time_interval:
+                data['time_interval'] = self.time_interval
         params = self._base_parameters()
         params[self._internal_name]= data
         return {self.name: params}
@@ -263,7 +270,7 @@ class TermFacet(Facet):
     def __init__(self, field=None, fields=None, name=None, size=10,
                  order=None, exclude=None,
                  regex=None, regex_flags="DOTALL",
-                 script=None, **kwargs):
+                 script=None, all_terms=None, **kwargs):
         super(TermFacet, self).__init__(**kwargs)
         self.name = name
         self.field = field
@@ -276,6 +283,7 @@ class TermFacet(Facet):
         self.regex = regex
         self.regex_flags = regex_flags
         self.script = script
+        self.all_terms = all_terms
 
     def serialize(self):
         if self.fields:
@@ -301,6 +309,8 @@ class TermFacet(Facet):
                 data['regex_flags'] = self.regex_flags
         elif self.script:
             data['script'] = self.script
+        if self.all_terms:
+            data['all_terms'] = self.all_terms
         params = self._base_parameters()
         params[self._internal_name]= data
         return {self.name: params}
@@ -328,7 +338,7 @@ class TermStatsFacet(Facet):
     def serialize(self):
         data = {}
 
-        if self.size:
+        if self.size is not None:
             data['size'] = self.size
 
         if self.order:

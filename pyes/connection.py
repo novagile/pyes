@@ -30,8 +30,7 @@ class ClientTransport(object):
     """Encapsulation of a client session."""
 
     def __init__(self, server, framed_transport, timeout, recycle):
-        host, port = server
-        socket = TSocket.TSocket(host, port)
+        socket = TSocket.TSocket(server.hostname, server.port)
         if timeout is not None:
             socket.setTimeout(timeout * 1000.0)
         if framed_transport:
@@ -69,36 +68,26 @@ def connect(servers=None, framed_transport=False, timeout=None,
     Failing servers are kept on a separate list and eventually retried, no
     sooner than `retry_time` seconds after failure.
 
-    Parameters
-    ----------
-    servers : [server]
-              List of ES servers with format: "hostname:port"
+    :keyword servers: [server]
+                      List of ES servers with format: "hostname:port"
+                      Default: [("127.0.0.1",9500)]
 
-              Default: [("127.0.0.1",9500)]
-    framed_transport: bool
-              If True, use a TFramedTransport instead of a TBufferedTransport
-    timeout: float
-              Timeout in seconds (e.g. 0.5)
+    :keyword framed_transport: If True, use a TFramedTransport instead of a TBufferedTransport
 
-              Default: None (it will stall forever)
-    retry_time: float
-              Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
+    :keyword timeout: Timeout in seconds (e.g. 0.5)
+                      Default: None (it will stall forever)
 
-              Default: 60
-    recycle: float
-              Max time in seconds before an open connection is closed and returned to the pool.
+    :keyword retry_time: Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
+                         Default: 60
 
-              Default: None (Never recycle)
+    :keyword recycle:  Max time in seconds before an open connection is closed and returned to the pool.
+                       Default: None (Never recycle)
 
-    max_retries: int
-              Max retry time on connection down
+    :keyword max_retries: Max retry time on connection down
 
-    round_robin: bool
-              *DEPRECATED*
+    :keyword round_robin: *DEPRECATED*
 
-    Returns
-    -------
-    ES client
+    :return ES client
     """
 
     if servers is None:
@@ -121,8 +110,7 @@ class ServerSet(object):
         self._dead = []
 
     def get(self):
-        self._lock.acquire()
-        try:
+        with self._lock:
             if self._dead:
                 ts, revived = self._dead.pop()
                 if ts > time.time():  # Not yet, put it back
@@ -134,16 +122,11 @@ class ServerSet(object):
                 logger.critical('No servers available')
                 raise NoServerAvailable()
             return random.choice(self._servers)
-        finally:
-            self._lock.release()
 
     def mark_dead(self, server):
-        self._lock.acquire()
-        try:
+        with self._lock:
             self._servers.remove(server)
             self._dead.insert(0, (time.time() + self._retry_time, server))
-        finally:
-            self._lock.release()
 
 
 class ThreadLocalConnection(object):
@@ -169,7 +152,7 @@ class ThreadLocalConnection(object):
                     if retry < self._max_retries:
                         continue
 
-                    raise NoServerAvailable
+                    raise NoServerAvailable(exc)
 
         setattr(self, attr, _client_call)
         return getattr(self, attr)
